@@ -1,0 +1,30 @@
+diff --git a/libavcodec/ac4dec.c b/libavcodec/ac4dec.c
+index 27b8a037e9..ff2ff4739c 100644
+--- a/libavcodec/ac4dec.c
++++ b/libavcodec/ac4dec.c
+@@ -32,6 +32,16 @@
+ #include "libavutil/opt.h"
+ 
+ #include "ac4dec_data.h"
++
++static void ac4_vector_fmul_reverse_c(float *dst, const float *src0,
++                                      const float *src1, int len)
++{
++    int i;
++    src1 += len - 1;
++    for (i = 0; i < len; i++)
++        dst[i] = src0[i] * src1[-i];
++}
++
+ #include "avcodec.h"
+ #include "get_bits.h"
+ #include "codec_internal.h"
+@@ -5390,7 +5400,7 @@ static void spectral_synthesis(AC4DecodeContext *s, SubstreamChannel *ssch)
+                 s->fdsp->vector_fmul_reverse(overlap + nskip_prev,
+                                              overlap + nskip_prev, swinr, N_prev);
+             else
+-                ff_vector_fmul_reverse_c(overlap + nskip_prev,
++                ac4_vector_fmul_reverse_c(overlap + nskip_prev,
+                                          overlap + nskip_prev, swinr, N_prev);
+ 
+             for (int n = 0; n < N; n++)

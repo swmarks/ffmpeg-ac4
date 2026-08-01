@@ -1,0 +1,111 @@
+name: AC-4 Branch Generation
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # Run weekly on Sundays
+  workflow_dispatch: # Allow manual triggering
+
+env:
+  COREELEC_TARGET: "n8.1.2"
+
+jobs:
+  generate-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ac4-orchestration branch
+        uses: actions/checkout@v3
+        with:
+          ref: ac4-orchestration
+          path: orchestration
+
+      - name: Checkout ffmpeg repository (Full)
+        uses: actions/checkout@v3
+        with:
+          repository: FFmpeg/FFmpeg
+          fetch-depth: 0
+          path: ffmpeg-ac4
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Process Tags and Inject AC-4
+        id: process_tags
+        run: |
+          cd ffmpeg-ac4
+          
+          # Add our repo as a remote to push branches to
+          git remote add origin-ac4 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          
+          # Find all tags >= n8.1.2
+          # We sort them by version, and filter using awk
+          tags=$(git tag --list 'n*' | grep -E '^n8\.1\.[2-9]|^n8\.[2-9]|^n9' | sort -V)
+          
+          coreelec_updated="false"
+
+          for tag in $tags; do
+            echo "Processing tag: $tag"
+            
+            # Reset to the tag
+            git reset --hard
+            git clean -fdx
+            git checkout -B "$tag-ac4" "$tag"
+            
+            # Copy scripts from orchestration
+            cp ../orchestration/inject-ac4.sh .
+            cp ../orchestration/custom-edits.patch .
+            
+            # Run injection
+            if ./inject-ac4.sh; then
+              # Push the branch forcefully
+              git push origin-ac4 "$tag-ac4" --force
+              
+              if [ "$tag" = "$COREELEC_TARGET" ]; then
+                # Check if the commit just created is actually new (i.e. AC-4 was updated)
+                # If we just rebuilt the exact same tree, the commit hash might be different due to timestamp,
+                # but let's just assume we generate a patch
+                git diff "$tag" > ../0007-add-ac4-decoder-parser-from-librempeg.patch
+                coreelec_updated="true"
+              fi
+            else
+              echo "Failed to inject AC-4 for tag $tag"
+              exit 1
+            fi
+          done
+          
+          echo "coreelec_updated=$coreelec_updated" >> $GITHUB_OUTPUT
+
+      - name: Checkout swmarks/CoreELEC
+        if: steps.process_tags.outputs.coreelec_updated == 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: swmarks/CoreELEC
+          token: ${{ secrets.COREELEC_PAT }}
+          path: coreelec-repo
+
+      - name: Apply Patch to CoreELEC and Open PR
+        if: steps.process_tags.outputs.coreelec_updated == 'true'
+        run: |
+          cd coreelec-repo
+          
+          git fetch origin ffmpeg-ac4-codec
+          git checkout -b bot/update-ac4 origin/ffmpeg-ac4-codec
+          
+          cp ../0007-add-ac4-decoder-parser-from-librempeg.patch packages/multimedia/ffmpeg/patches/
+          
+          git add packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+          
+          # Only commit and push if the patch actually changed
+          if ! git diff --cached --quiet; then
+            git commit -m "ffmpeg: Update AC-4 decoder patch from upstream librempeg"
+            git push origin bot/update-ac4 --force
+            
+            gh pr create \
+              --title "Update AC-4 FFmpeg Patch from librempeg" \
+              --body "Automated PR from ffmpeg-ac4 sync action. Upstream librempeg has released new updates to the AC-4 code. The custom ARM DSP edits have been safely rebased on top of it." \
+              --base ffmpeg-ac4-codec \
+              --head bot/update-ac4 || echo "PR already exists"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.COREELEC_PAT }}
