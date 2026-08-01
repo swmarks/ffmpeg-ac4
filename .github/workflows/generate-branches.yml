@@ -1,6 +1,9 @@
 name: AC-4 Branch Generation
 
 on:
+  push:
+    branches:
+      - ac4-orchestration
   schedule:
     - cron: '0 0 * * 0' # Run weekly on Sundays
   workflow_dispatch: # Allow manual triggering
