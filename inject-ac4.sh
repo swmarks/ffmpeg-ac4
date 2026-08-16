@@ -67,7 +67,12 @@ echo "Staging files..."
 git add libavcodec/ac4dec.c libavcodec/ac4dec_data.h libavcodec/ac4_parser.c
 git add libavcodec/Makefile libavcodec/allcodecs.c libavcodec/kbdwin.h libavcodec/parsers.c libavformat/mpegts.c libavformat/mpegts.h
 
+commit_msg="ffmpeg: Inject AC-4 decoder from librempeg"
+if [ -n "$LIBREMPEG_SHORT_SHA" ]; then
+    commit_msg="ffmpeg: Inject AC-4 decoder from librempeg (${LIBREMPEG_SHORT_SHA})"
+fi
+
 if ! git diff --cached --quiet; then
-    git commit -m "ffmpeg: Inject AC-4 decoder from librempeg"
+    git commit -m "$commit_msg"
 fi
 echo "AC-4 injection complete."

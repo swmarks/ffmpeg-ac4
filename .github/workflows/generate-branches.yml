@@ -8,21 +8,18 @@ on:
     - cron: '0 0 * * 0' # Run weekly on Sundays
   workflow_dispatch: # Allow manual triggering
 
-env:
-  COREELEC_TARGET: "n8.1.2"
-
 jobs:
   generate-branches:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout ac4-orchestration branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ac4-orchestration
           path: orchestration
 
       - name: Checkout ffmpeg repository (Full)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: FFmpeg/FFmpeg
           fetch-depth: 0
@@ -38,14 +35,22 @@ jobs:
         run: |
           cd ffmpeg-ac4
           
+          # Query upstream librempeg HEAD commit SHA
+          LIBREMPEG_SHA=$(git ls-remote https://github.com/librempeg/librempeg.git HEAD | awk '{print $1}')
+          LIBREMPEG_SHORT_SHA="${LIBREMPEG_SHA:0:7}"
+          echo "LIBREMPEG_SHA=$LIBREMPEG_SHA" >> $GITHUB_ENV
+          echo "LIBREMPEG_SHORT_SHA=$LIBREMPEG_SHORT_SHA" >> $GITHUB_ENV
+          export LIBREMPEG_SHORT_SHA
+          
+          echo "Using upstream librempeg commit: $LIBREMPEG_SHA ($LIBREMPEG_SHORT_SHA)"
+
           # Add our repo as a remote to push branches to
           git remote add origin-ac4 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           
           # Find all tags >= n8.1.2
-          # We sort them by version, and filter using awk
           tags=$(git tag --list 'n*' | grep -E '^n8\.1\.[2-9]|^n8\.[2-9]|^n9' | sort -V)
           
-          coreelec_updated="false"
+          mkdir -p ../patches
 
           for tag in $tags; do
             echo "Processing tag: $tag"
@@ -64,51 +69,101 @@ jobs:
               # Push the branch forcefully
               git push origin-ac4 "$tag-ac4" --force
               
-              if [ "$tag" = "$COREELEC_TARGET" ]; then
-                # Check if the commit just created is actually new (i.e. AC-4 was updated)
-                # If we just rebuilt the exact same tree, the commit hash might be different due to timestamp,
-                # but let's just assume we generate a patch
-                git diff "$tag" > ../0007-add-ac4-decoder-parser-from-librempeg.patch
-                coreelec_updated="true"
-              fi
+              # Generate version-specific patch
+              git diff "$tag" > "../patches/0007-ac4-${tag}.patch"
             else
               echo "Failed to inject AC-4 for tag $tag"
               exit 1
             fi
           done
-          
-          echo "coreelec_updated=$coreelec_updated" >> $GITHUB_OUTPUT
 
       - name: Checkout swmarks/CoreELEC
-        if: steps.process_tags.outputs.coreelec_updated == 'true'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: swmarks/CoreELEC
           token: ${{ secrets.COREELEC_PAT }}
+          fetch-depth: 0
           path: coreelec-repo
 
-      - name: Apply Patch to CoreELEC and Open PR
-        if: steps.process_tags.outputs.coreelec_updated == 'true'
+      - name: Synchronize CoreELEC Version Branches and PR
         run: |
           cd coreelec-repo
           
-          git fetch origin ffmpeg-ac4-codec
-          git checkout -b bot/update-ac4 origin/ffmpeg-ac4-codec
+          # Add upstream pannal remote and fetch coreelec-21_local
+          git remote add panni https://github.com/pannal/CoreELEC.git || git remote set-url panni https://github.com/pannal/CoreELEC.git
+          git fetch panni coreelec-21_local
           
-          cp ../0007-add-ac4-decoder-parser-from-librempeg.patch packages/multimedia/ffmpeg/patches/
-          
-          git add packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
-          
-          # Only commit and push if the patch actually changed
-          if ! git diff --cached --quiet; then
-            git commit -m "ffmpeg: Update AC-4 decoder patch from upstream librempeg"
-            git push origin bot/update-ac4 --force
+          # 1. Process and generate versioned branches based on panni/coreelec-21_local
+          for patch_file in ../patches/0007-ac4-n*.patch; do
+            [ -f "$patch_file" ] || continue
+            filename=$(basename "$patch_file")
+            tag="${filename#0007-ac4-}"
+            tag="${tag%.patch}"
+            version="${tag#n}"
             
-            gh pr create \
-              --title "Update AC-4 FFmpeg Patch from librempeg" \
-              --body "Automated PR from ffmpeg-ac4 sync action. Upstream librempeg has released new updates to the AC-4 code. The custom ARM DSP edits have been safely rebased on top of it." \
-              --base ffmpeg-ac4-codec \
-              --head bot/update-ac4 || echo "PR already exists"
+            tarball_url="https://ffmpeg.org/releases/ffmpeg-${version}.tar.xz"
+            
+            # Check if official release tarball exists
+            if curl --output /dev/null --silent --head --fail "$tarball_url"; then
+              echo "=========================================="
+              echo "Processing CoreELEC branch for FFmpeg ${version} (${tag})"
+              echo "=========================================="
+              
+              pkg_sha256=$(curl -sL "$tarball_url" | sha256sum | awk '{print $1}')
+              branch_name="ffmpeg-${version}-ac4"
+              
+              git checkout -B "$branch_name" panni/coreelec-21_local
+              
+              cp "$patch_file" packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+              
+              sed -i "s/^PKG_VERSION=\".*\"/PKG_VERSION=\"${version}\"/" packages/multimedia/ffmpeg/package.mk
+              sed -i "s/^PKG_SHA256=\".*\"/PKG_SHA256=\"${pkg_sha256}\"/" packages/multimedia/ffmpeg/package.mk
+              
+              git add packages/multimedia/ffmpeg/package.mk packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+              
+              if ! git diff --cached --quiet; then
+                git commit -m "ffmpeg: Update to ${version} with AC-4 patch from librempeg (${LIBREMPEG_SHORT_SHA})"
+                git push origin "$branch_name" --force
+                echo "Pushed updated branch $branch_name"
+              else
+                echo "No changes for branch $branch_name"
+              fi
+            else
+              echo "Skipping non-tarball/dev tag $tag for standalone CoreELEC package branch"
+            fi
+          done
+          
+          # 2. Update ffmpeg-ac4-codec branch and open/update PR
+          echo "=========================================="
+          echo "Checking ffmpeg-ac4-codec branch for PR update"
+          echo "=========================================="
+          
+          git fetch origin ffmpeg-ac4-codec
+          git checkout -B bot/update-ac4 origin/ffmpeg-ac4-codec
+          
+          target_version=$(grep '^PKG_VERSION=' packages/multimedia/ffmpeg/package.mk | head -n1 | cut -d'"' -f2)
+          target_patch="../patches/0007-ac4-n${target_version}.patch"
+          
+          if [ -f "$target_patch" ]; then
+            cp "$target_patch" packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+            git add packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+            
+            if ! git diff --cached --quiet; then
+              git commit -m "ffmpeg: Update AC-4 decoder patch from librempeg (${LIBREMPEG_SHORT_SHA})"
+              git push origin bot/update-ac4 --force
+              
+              gh pr create \
+                --title "Update AC-4 FFmpeg Patch from librempeg (${LIBREMPEG_SHORT_SHA})" \
+                --body "Automated PR from ffmpeg-ac4 sync action. Upstream librempeg commit: https://github.com/librempeg/librempeg/commit/${LIBREMPEG_SHA}. Custom ARM DSP edits applied." \
+                --base ffmpeg-ac4-codec \
+                --head bot/update-ac4 || echo "PR already exists"
+            else
+              echo "Patch in ffmpeg-ac4-codec is already up to date with librempeg (${LIBREMPEG_SHORT_SHA})"
+            fi
+          else
+            echo "Warning: No matching patch found for target version n${target_version}"
           fi
         env:
           GH_TOKEN: ${{ secrets.COREELEC_PAT }}
+          LIBREMPEG_SHA: ${{ env.LIBREMPEG_SHA }}
+          LIBREMPEG_SHORT_SHA: ${{ env.LIBREMPEG_SHORT_SHA }}
