@@ -123,11 +123,12 @@ jobs:
               
               if ! git diff --cached --quiet; then
                 git commit -m "ffmpeg: Update to ${version} with AC-4 patch from librempeg (${LIBREMPEG_SHORT_SHA})"
-                git push origin "$branch_name" --force
-                echo "Pushed updated branch $branch_name"
+                echo "Committed updates for branch $branch_name"
               else
-                echo "No changes for branch $branch_name"
+                echo "No changes against panni/coreelec-21_local for branch $branch_name"
               fi
+              git push origin "$branch_name" --force
+              echo "Pushed branch $branch_name"
             else
               echo "Skipping non-tarball/dev tag $tag for standalone CoreELEC package branch"
             fi
