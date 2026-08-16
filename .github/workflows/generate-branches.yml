@@ -100,6 +100,7 @@ jobs:
             tag="${filename#0007-ac4-}"
             tag="${tag%.patch}"
             version="${tag#n}"
+            major_ver="${version%%.*}"
             
             tarball_url="https://ffmpeg.org/releases/ffmpeg-${version}.tar.xz"
             
@@ -109,31 +110,62 @@ jobs:
               echo "Processing CoreELEC branch for FFmpeg ${version} (${tag})"
               echo "=========================================="
               
-              pkg_sha256=$(curl -sL "$tarball_url" | sha256sum | awk '{print $1}')
+              pkg_sha256=$(curl -sL "$tarball_url" | sha256sum | awk "{print \$1}")
               branch_name="ffmpeg-${version}-ac4"
               
               git checkout -B "$branch_name" panni/coreelec-21_local
               
-              cp "$patch_file" packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+              # Locate best matching coreelec-compat folder
+              compat_dir=""
+              if [ -d "../orchestration/coreelec-compat/${version}" ]; then
+                compat_dir="../orchestration/coreelec-compat/${version}"
+              elif [ -d "../orchestration/coreelec-compat/${major_ver}.x" ]; then
+                compat_dir="../orchestration/coreelec-compat/${major_ver}.x"
+              else
+                latest_match=$(find ../orchestration/coreelec-compat/ -mindepth 1 -maxdepth 1 -type d -name "${major_ver}.*" 2>/dev/null | sort -V | tail -n 1)
+                if [ -n "$latest_match" ] && [ -d "$latest_match" ]; then
+                  compat_dir="$latest_match"
+                fi
+              fi
               
+              # COMMIT 1: Base Version Bump + Companion Compatibility Patches
               sed -i "s/^PKG_VERSION=\".*\"/PKG_VERSION=\"${version}\"/" packages/multimedia/ffmpeg/package.mk
               sed -i "s/^PKG_SHA256=\".*\"/PKG_SHA256=\"${pkg_sha256}\"/" packages/multimedia/ffmpeg/package.mk
+              git add packages/multimedia/ffmpeg/package.mk
               
-              git add packages/multimedia/ffmpeg/package.mk packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+              if [ -n "$compat_dir" ]; then
+                echo "Applying CoreELEC compatibility patches from $compat_dir"
+                [ -f "${compat_dir}/0001-added_upstream_mvc_patches.patch" ] &&                   cp "${compat_dir}/0001-added_upstream_mvc_patches.patch" packages/multimedia/ffmpeg/patches/
+                [ -f "${compat_dir}/0003-Add-hdr10p-raw.patch" ] &&                   cp "${compat_dir}/0003-Add-hdr10p-raw.patch" packages/multimedia/ffmpeg/patches/
+                [ -f "${compat_dir}/ffmpeg-001-postproc.patch" ] &&                   cp "${compat_dir}/ffmpeg-001-postproc.patch" packages/multimedia/ffmpeg/patches/postproc/
+                if [ -f "${compat_dir}/inputstream.ffmpegdirect-001-ffmpeg-parser.patch" ]; then
+                  mkdir -p projects/Amlogic-ce/packages/mediacenter/kodi-binary-addons/inputstream.ffmpegdirect/patches/
+                  cp "${compat_dir}/inputstream.ffmpegdirect-001-ffmpeg-parser.patch" projects/Amlogic-ce/packages/mediacenter/kodi-binary-addons/inputstream.ffmpegdirect/patches/
+                fi
+                
+                git add packages/multimedia/ffmpeg/patches/                         projects/Amlogic-ce/packages/mediacenter/kodi-binary-addons/inputstream.ffmpegdirect/patches/ 2>/dev/null || true
+              fi
               
               if ! git diff --cached --quiet; then
-                git commit -m "ffmpeg: Update to ${version} with AC-4 patch from librempeg (${LIBREMPEG_SHORT_SHA})"
-                echo "Committed updates for branch $branch_name"
-              else
-                echo "No changes against panni/coreelec-21_local for branch $branch_name"
+                git commit -m "ffmpeg: Update to ${version} and refresh CoreELEC patches"
+                echo "Committed baseline updates (Commit 1) for branch $branch_name"
               fi
+              
+              # COMMIT 2: Pristine AC-4 Codec & Parser Injection
+              cp "$patch_file" packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+              git add packages/multimedia/ffmpeg/patches/0007-add-ac4-decoder-parser-from-librempeg.patch
+              
+              if ! git diff --cached --quiet; then
+                git commit -m "ffmpeg: Add AC-4 decoder and parser from librempeg (${LIBREMPEG_SHORT_SHA})"
+                echo "Committed AC-4 patch (Commit 2) for branch $branch_name"
+              fi
+              
               git push origin "$branch_name" --force
-              echo "Pushed branch $branch_name"
+              echo "Pushed 2-commit branch $branch_name"
             else
               echo "Skipping non-tarball/dev tag $tag for standalone CoreELEC package branch"
             fi
           done
-          
           # 2. Update ffmpeg-ac4-codec branch and open/update PR
           echo "=========================================="
           echo "Checking ffmpeg-ac4-codec branch for PR update"

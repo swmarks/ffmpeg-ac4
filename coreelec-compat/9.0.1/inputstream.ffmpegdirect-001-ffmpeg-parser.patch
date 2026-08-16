@@ -1,0 +1,24 @@
+--- a/src/stream/FFmpegStream.cpp
++++ b/src/stream/FFmpegStream.cpp
+@@ -1677,17 +1677,17 @@
+         st->codecpar->extradata_size = retExtraData.GetSize();
+         st->codecpar->extradata = retExtraData.TakeData();
+ 
+-        if (parser->second->m_parserCtx->parser->parser_parse)
++        if (parser->second->m_parserCtx->parser)
+         {
+           parser->second->m_codecCtx->extradata = st->codecpar->extradata;
+           parser->second->m_codecCtx->extradata_size = st->codecpar->extradata_size;
+           const uint8_t* outbufptr;
+           int bufSize;
+           parser->second->m_parserCtx->flags |= PARSER_FLAG_COMPLETE_FRAMES;
+-          parser->second->m_parserCtx->parser->parser_parse(parser->second->m_parserCtx,
++          av_parser_parse2(parser->second->m_parserCtx,
+                                                             parser->second->m_codecCtx,
+-                                                            &outbufptr, &bufSize,
+-                                                            pkt->data, pkt->size);
++                                                            const_cast<uint8_t**>(&outbufptr), &bufSize,
++                                                            pkt->data, pkt->size, AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+           parser->second->m_codecCtx->extradata = nullptr;
+           parser->second->m_codecCtx->extradata_size = 0;
+ 
