@@ -209,6 +209,7 @@ https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/
 
 /* ISO/IEC 13818-1 Table 2-109 */
 #define JXS_VIDEO_DESCRIPTOR         0x14 /* JPEG-XS descriptor */
+#define AC4_DESCRIPTOR_TAG_EXTENSION 0x15
 #define LCEVC_VIDEO_DESCRIPTOR       0x17 /* LCEVC video descriptor */
 #define LCEVC_LINKAGE_DESCRIPTOR     0x18 /* LCEVC linkage descriptor */
 
@@ -228,6 +229,7 @@ https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/
 /* DVB descriptor_tag_extension values from
    ETSI EN 300 468 Table 109: Possible locations of extended descriptors */
 #define SUPPLEMENTARY_AUDIO_DESCRIPTOR 0x06
+#define AC4_DESCRIPTOR 0x15
 
 /** see "Dolby Vision Streams Within the MPEG-2 Transport Stream Format"
 https://professional.dolby.com/siteassets/content-creation/dolby-vision-for-content-creators/dolby-vision-bitstreams-in-mpeg-2-transport-stream-multiplex-v1.2.pdf */
