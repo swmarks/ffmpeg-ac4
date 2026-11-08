@@ -210,6 +210,7 @@ https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/
 
 /* ISO/IEC 13818-1 Table 2-109 */
 #define JXS_VIDEO_DESCRIPTOR         0x14 /* JPEG-XS descriptor */
+#define AC4_DESCRIPTOR_TAG_EXTENSION 0x15
 #define LCEVC_VIDEO_DESCRIPTOR       0x17 /* LCEVC video descriptor */
 #define LCEVC_LINKAGE_DESCRIPTOR     0x18 /* LCEVC linkage descriptor */
 
